@@ -62,92 +62,41 @@ def round_coords(ds):
 
 def collect_prediction_data(time_start,
                             time_end,
-                            scale='1km',
-                            covariables=[
-                                 #'LAI',
-                                 #'LAI_anom',
-                                 'kNDVI',
-                                 'kNDVI_anom',
-                                 #'FPAR',
-                                 #'FPAR-NDVI',
-                                 'LST',
-                                 'trees',
-                                 'grass',
-                                 'bare',
-                                 'C4_grass',
-                                 #'Tree',
-                                 #'NonTree',
-                                 #'NonVeg',
-                                 'LST_Tair',
-                                 'TWI',
-                                 'NDWI',
-                                 #'NDWI_anom',
-                                 'rain',
-                                 'rain_cml3',
-                                 'rain_cml6',
-                                 'rain_cml12',
-                                 'rain_anom',
-                                 'rain_cml3_anom',
-                                 'rain_cml6_anom',
-                                 'rain_cml12_anom',
-                                 'srad',
-                                 'srad_anom',
-                                 'vpd',
-                                 'tavg',
-                                 'tavg_anom',
-                                 #'SOC',
-                                 #'CO2',
-                                 #'C4percent',
-                                 #'Elevation',
-                                 #'MOY',
-                                 'VegH',
-                                 #'MI'
-                            ],
-                            chunks=dict(latitude=1150, longitude=1100, time=1),
+                            chunks=dict(latitude=1000, longitude=1000, time=1),
                             export=False,
                             verbose=True
                            ):
   
+    # Grab a list of all datasets in the folder
+    base='/g/data/os22/chad_tmp/climate-carbon-interactions/data/5km/' 
+    covariables = [base+i for i in os.listdir(base) if i.endswith('.nc')]
+    covariables.sort()
+
+    #loop through datasets and append
     dss=[]
-    base='/g/data/os22/chad_tmp/NEE_modelling/data/' 
     for var in covariables:
         if verbose:
-            print(f'   Extracting {var}')
-            
-        ds = xr.open_dataset(f'{base}{scale}/{var}_{scale}_monthly_2002_2022.nc',
-                             chunks=chunks
-                            )
+            print('Extracting', var.replace(base, ''))
+
+        ds = assign_crs(xr.open_dataset(var, chunks=chunks), crs='EPSG:4326')
         ds = ds.sel(time=slice(time_start, time_end))
-        
-        #makse sure coords match (remove trailing zeros)
-        ds['latitude'] = ds.latitude.astype('float32')
-        ds['latitude'] = np.array([round(i,4) for i in ds.latitude.values])
-        ds['longitude'] = ds.longitude.astype('float32')
-        ds['longitude'] = np.array([round(i,4) for i in ds.longitude.values])
-        
+        ds = round_coords(ds)
         dss.append(ds)
     
     #merge all datasets together
     if verbose:
-        print('   Merge and create valid data mask')
+        print('   Merge datasets')
+    
     data = xr.merge(dss, compat='override')
-                         
-    # #create mask where data is valid (excludes urban, water)
-    # mask = ~np.isnan(data['PFT'].isel(time=0))
-    # data = data.where(mask)
-    
-    #remove landcover
-    #data = data.drop('PFT')
-    
-    if verbose:
-        print('   Exporting netcdf')
-    
-    # export data
+
+    # format
     data = data.rename({'latitude':'y', 'longitude':'x'}) #this helps with predict_xr
     data = data.astype('float32') #make sure all data is in float32
     data = assign_crs(data, crs='epsg:4326')
-    
+
     if export:
-        data.to_netcdf('/g/data/os22/chad_tmp/NEE_modelling/results/prediction_data/prediction_data_'+time_start+'_'+time_end+'.nc')
+        if verbose:
+            print('   Exporting netcdf')
+        data.compute().to_netcdf(export+'/prediction_data_'+time_start+'_'+time_end+'.nc')
     
     return data

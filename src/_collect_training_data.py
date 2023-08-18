@@ -54,7 +54,7 @@ def extract_ec_gridded_data(version='2023_v1',
                             level='L6',
                             type='default',
                             add_comparisons=False,
-                            save_ec_data=False,
+                            save_ec_data=None,
                             return_coords=True,
                             export_path=None,
                             verbose=False
@@ -91,6 +91,7 @@ def extract_ec_gridded_data(version='2023_v1',
     
     #loop through all the sites and open the datasets specified by the version and level etc.
     for i in range(len(sites_names)):
+
         if verbose==False:
             print("Extracting OzFlux site: {:02}/{:02}\r".format(i + 1, len(range(0, len(sites_names)))), end="")
         
@@ -102,14 +103,19 @@ def extract_ec_gridded_data(version='2023_v1',
             files.append(link["href"])
             
         full_path = partial_url.replace("catalog.html", "").replace('catalog', 'dodsC')+files[0][files[0].rindex('/')+1:]
-    
+
+        if os.path.exists(export_path+full_path[63:68]+'_training_data.csv'):
+            print('skipping '+ full_path[63:68])
+            continue
+        
         if verbose:
             print('dataset:', full_path)
         
         flux = xr.open_dataset(full_path)
-                                   
+
         if save_ec_data:
-            flux.to_netcdf('/g/data/os22/chad_tmp/NEE_modelling/data/ec_netcdfs/'+suffix[0:5]+'_EC_site.nc')
+            del flux.attrs['_NCProperties'] #delete 'reserved' property name
+            flux.to_netcdf(save_ec_data+full_path[63:68]+'_'+version+'_'+level+'.nc')
         
         # Set negative GPP, ER, and ET measurements as zero
         flux['GPP_SOLO'] = xr.where(flux.GPP_SOLO < 0, 0, flux.GPP_SOLO)
@@ -125,13 +131,11 @@ def extract_ec_gridded_data(version='2023_v1',
         time_start = str(np.datetime_as_string(flux.time.values[0], unit='D'))
         time_end = str(np.datetime_as_string(flux.time.values[-1], unit='D'))
         
-        # if "TiTreeEast" in suffix: #metadata on nc file is wrong
-        #     idx=dict(latitude=-22.287,  longitude=133.640)
-        
-        # if "DalyPasture" in suffix: #metadata on nc file is wrong
-        #     idx=dict(latitude=-14.0633,  longitude=131.3181)
-    
-        # else:
+        if "Longr" in full_path[63:68]: #coorindates on nc file is wrong
+            lat=-23.5232
+            lon=144.3104
+            #idx=dict(latitude=-23.5232,  longitude=144.3104)
+
         idx=dict(latitude=lat,  longitude=lon)
     
         variables = ['GPP_SOLO','ER_SOLO','ET','Ta','Sws','RH','VP','Precip','Fn','Fe','Fh','Fsd','Fld','CO2']
@@ -148,6 +152,12 @@ def extract_ec_gridded_data(version='2023_v1',
         # calculate VPD on ec data
         df_ec['VPD_EC'] = VPD(df_ec.RH_EC, df_ec.Ta_EC)
         df_ec = df_ec.drop(['VP_EC'], axis=1) # drop VP
+
+        #add canopy height from the attributes
+        try:
+            df_ec['VegH_EC'] = float(flux.attrs['canopy_height'][:-1])
+        except:
+            df_ec['VegH_EC'] = np.nan
     
         #--------Remote sensing data--------------------------------------
         
