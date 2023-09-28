@@ -3,9 +3,6 @@ library(dtplyr, warn.conflicts = FALSE)
 setDTthreads(threads=0)
 library(mgcv)
 library(RcppArmadillo)
-#library(units)
-
-#setwd(here::here())
 
 avhrr_path = '/g/data/os22/chad_tmp/climate-carbon-interactions/data/LST_harmonization/AVHRR_LST_5km_monthly_1982_2013.nc'
 modis_path = '/g/data/os22/chad_tmp/climate-carbon-interactions/data/LST_harmonization/MODIS_LST_5km_monthly_2001_2022.nc'
@@ -62,6 +59,7 @@ d_cdr <- d_cdr %>%
   as.data.table()
 
 gc()
+
 #Filter the dataset by climatolgies noise etc
 d_cdr <- d_cdr %>% 
   lazy_dt() %>% 
@@ -77,7 +75,7 @@ d_cdr <- d_cdr %>%
 rm(d_cdr_norms)
 gc()
 
-# Import MCD43 NDVI--------------------------------------------------------
+# Import MODIS LST--------------------------------------------------------
 tmp_nm <- stars::read_ncdf(modis_path, var='LST_median', make_time = T, proxy=F)
 tmp_nm <- tmp_nm %>% set_names(c('lst_mcd'))
 
@@ -157,17 +155,10 @@ d_export <- merge(dc2,
 tmp <- st_as_stars(d_export, dims = c("x","y","time"))
 
 ## requires stars 0.6-1 or greater
-if (var=='NDVI') {
-stars::write_mdim(tmp, 
-           '/g/data/os22/chad_tmp/climate-carbon-interactions/data/Harmonized_NDVI_AVHRR_MODIS_1982_2013.nc', 
-           layer = c("ndvi_mcd", "ndvi_cdr", "ndvi_mcd_pred", "month", "year"
-           )) 
-} else {
 stars::write_mdim(tmp, 
            '/g/data/os22/chad_tmp/climate-carbon-interactions/data/Harmonized_LST_AVHRR_MODIS_1982_2013.nc', 
-           layer = c("ndvi_mcd", "ndvi_cdr", "ndvi_mcd_pred", "month", "year"
+           layer = c("LST_mcd", "LST_cdr", "LST_mcd_pred", "month", "year"
            )) 
-}
 
 
 

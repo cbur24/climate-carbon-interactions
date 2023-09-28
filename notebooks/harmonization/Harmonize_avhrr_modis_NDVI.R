@@ -4,27 +4,20 @@ setDTthreads(threads=0)
 library(mgcv)
 library(RcppArmadillo)
 
-#setwd(here::here())
+avhrr_path = '/g/data/os22/chad_tmp/climate-carbon-interactions/data/TAS_AVHRR_5km_monthly_1982_2013.nc'
+modis_path = '/g/data/os22/chad_tmp/climate-carbon-interactions/data/TAS_MODIS_NDVI_median_5km_monthly_2001_2022.nc'
 
-avhrr_path = '/g/data/os22/chad_tmp/climate-carbon-interactions/data/AVHRR_5km_monthly_1982_2013.nc'
-modis_path = '/g/data/os22/chad_tmp/climate-carbon-interactions/data/MODIS_NDVI_median_5km_monthly_2001_2022.nc'
-
-var = 'LST'
 ## Read AVHRR data
-tmp_median = stars::read_ncdf(avhrr_path, var=paste(var, "median", sep="_"), make_time = T, proxy=F)
+tmp_median = stars::read_ncdf(avhrr_path, var="NDVI_median", make_time = T, proxy=F)
 tmp_median <- tmp_median %>% set_names(c(paste(var, "cdr", sep="_")))
 
 tmp_nobs = stars::read_ncdf(avhrr_path, var='n_obs', make_time = T, proxy=F)
 tmp_nobs <- tmp_nobs %>% set_names(c('nobs'))
 
-tmp_sd = stars::read_ncdf(avhrr_path, var=paste(var, "stddev", sep="_"), make_time = T, proxy=F)
+tmp_sd = stars::read_ncdf(avhrr_path, var="NDVI_stddev", make_time = T, proxy=F)
 tmp_sd <- tmp_sd %>% set_names(c('sd'))
 
-if (var=='LST') {
-tmp_sza = stars::read_ncdf(avhrr_path, var='VZA_median', make_time = T, proxy=F)
-} else {
 tmp_sza = stars::read_ncdf(avhrr_path, var='SZEN_median', make_time = T, proxy=F)
-}
 tmp_sza <- tmp_sza %>% set_names(c('sza'))
 
 tmp_tod = stars::read_ncdf(avhrr_path, var='TIMEOFDAY_median', make_time = T, proxy=F)
@@ -32,7 +25,7 @@ tmp_tod <- tmp_tod %>% set_names(c('tod'))
 
 ## Convert AVHRR data into data tables
 tmp <- c(tmp_median, tmp_nobs, tmp_sd, tmp_sza, tmp_tod)
-d_cdr <- tmp %>% as.data.frame() %>% as.data.table()
+d_cdr <- tmp %>% units::drop_units() %>% as.data.frame() %>% as.data.table()
 d_cdr <- d_cdr %>% mutate(month=month(time))
 
 #clear up some memory
@@ -53,7 +46,7 @@ d_cdr_norms <- d_cdr %>%
   ungroup() %>% 
   as.data.table()
 
-#Filter the dataset by climatolgies noise etc
+# calculate anomalies
 d_cdr <- merge(d_cdr_norms, d_cdr, by=c("x","y","month"))
 d_cdr <- d_cdr %>% 
   lazy_dt() %>% 
@@ -67,6 +60,7 @@ d_cdr <- d_cdr %>%
 
 gc()
 
+#Filter the dataset by climatolgies noise etc
 d_cdr <- d_cdr %>% 
   lazy_dt() %>% 
   filter(nobs >= 3) %>% 
@@ -82,10 +76,10 @@ rm(d_cdr_norms)
 gc()
 
 # Import MCD43 NDVI--------------------------------------------------------
-tmp_nm <- stars::read_ncdf(modis_path, var=paste(var, "median", sep="_"), make_time = T, proxy=F)
-tmp_nm <- tmp_nm %>% set_names(c(paste(var, "mcd", sep="_")))
+tmp_nm <- stars::read_ncdf(modis_path, var="LST_median", make_time = T, proxy=F)
+tmp_nm <- tmp_nm %>% set_names(c('NDVI_mcd'))
 
-d_mcd <- as_tibble(tmp_nm) %>% as.data.table()
+d_mcd <- tmp_nm %>% units::drop_units() %>% as_tibble(tmp_nm) %>% as.data.table()
 d_mcd <- d_mcd[between(time,ymd("2001-01-01"),ymd("2013-12-31"))==T]
 rm(tmp_nm)
 gc()
@@ -161,17 +155,10 @@ d_export <- merge(dc2,
 tmp <- st_as_stars(d_export, dims = c("x","y","time"))
 
 ## requires stars 0.6-1 or greater
-if (var=='NDVI') {
 stars::write_mdim(tmp, 
-           '/g/data/os22/chad_tmp/climate-carbon-interactions/data/Harmonized_NDVI_AVHRR_MODIS_1982_2013.nc', 
+           '/g/data/os22/chad_tmp/climate-carbon-interactions/data/TAS_Harmonized_NDVI_AVHRR_MODIS_1982_2013.nc', 
            layer = c("ndvi_mcd", "ndvi_cdr", "ndvi_mcd_pred", "month", "year"
            )) 
-} else {
-stars::write_mdim(tmp, 
-           '/g/data/os22/chad_tmp/climate-carbon-interactions/data/Harmonized_LST_AVHRR_MODIS_1982_2013.nc', 
-           layer = c("ndvi_mcd", "ndvi_cdr", "ndvi_mcd_pred", "month", "year"
-           )) 
-}
 
 
 
