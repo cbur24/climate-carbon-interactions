@@ -1,9 +1,12 @@
+
 # This script uses the MGCV Generalised Additive Modelling package to calibrate
 # monthly AVHRR NDVI (CDR version) to approximate MODIS NDVI. Predictions are run in
-# parallel so computation is fast (~15 mins with 11 cores), but the script requires a 'hugemem' queue
-# on the NCI (12 cores, 366 GiB works well). The input datasets have been split
-# into regions to increase the accuracy of the final predictions - 
+# parallel so computation is fast (~15 mins with 11 cores), but the script requires a
+# 'hugemem' queue on the NCI (12 cores, 366 GiB works well), using the R-Studio Rocker Image.
+# The input datasets have been split into regions to increase the accuracy of the final predictions - 
 # 'trees' and 'nontrees' defined using woody cover fraction.
+
+# This version of the script DOES NOT use climate features as inputs to the GAM.
 
 # Written by Sami Rifai and Chad Burton Oct. 2023
 
@@ -11,14 +14,13 @@ library(stars); library(tidyverse); library(data.table); library(lubridate)
 library(dtplyr, warn.conflicts = FALSE); library(mgcv); library(RcppArmadillo)
 library(metrica); library(scico); library(mgcViz); library(foreach); library(doParallel)
 
-
 ##########################################################################
 # Analysis Parameters ----------------------------------------------------
 # (Adjust parameters to suit)
 ##########################################################################
 
-n_cores <- 11
-base_path <- "/g/data/os22/chad_tmp/climate-carbon-interactions/data/NDVI_harmonization/regions/"
+n_cores <- 12
+base_path <- "/g/data/os22/chad_tmp/climate-carbon-interactions/data/NDVI_harmonization/GAM/"
 regions = list('trees', 'nontrees')
 
 #loop through the regions and create models/predictions
@@ -32,28 +34,22 @@ for (i in regions) {
     
     # These AVHRR datasets have already been filtered/cleaned in a python script,
     # so the usual data-table filtering has been removed in this script.
-    avhrr_path <- paste(base_path, i, '_AVHRR_NDVI_5km_monthly_1982_2013_extraFeatures.nc', sep='')
+    avhrr_path <- paste(base_path, i, '_AVHRR_NDVI_5km_monthly_1982_2013_GAMinput.nc', sep='')
     modis_path <- paste(base_path, i, '_MODIS_NDVI_5km_monthly_200003_202212.nc', sep='')
     
     ## Read AVHRR data 'bands' separately
     tmp_median <- stars::read_ncdf(avhrr_path, var="NDVI_avhrr", make_time = T, proxy=F)
     tmp_median <- tmp_median %>% set_names(c("ndvi_cdr"))
     
-    tmp_mod_mean <- stars::read_ncdf(avhrr_path, var="NDVI_modis_mean", make_time = T, proxy=F)
-    tmp_mod_mean <- tmp_mod_mean %>% set_names(c("ndvi_modis_mean"))
+    tmp_mod_median <- stars::read_ncdf(avhrr_path, var="NDVI_modis_median", make_time = T, proxy=F)
+    tmp_mod_median <- tmp_mod_median %>% set_names(c("ndvi_modis_median"))
     
-    tmp_median_1b <- stars::read_ncdf(avhrr_path, var="NDVI_avhrr_1b", make_time = T, proxy=F)
-    tmp_median_1b <- tmp_median_1b %>% set_names(c("ndvi_cdr_1b"))
+    tmp_mod_min <- stars::read_ncdf(avhrr_path, var="NDVI_modis_min", make_time = T, proxy=F)
+    tmp_mod_min <- tmp_mod_min %>% set_names(c("ndvi_modis_min"))
     
-    tmp_median_1f <- stars::read_ncdf(avhrr_path, var="NDVI_avhrr_1f", make_time = T, proxy=F)
-    tmp_median_1f <- tmp_median_1f %>% set_names(c("ndvi_cdr_1f"))
-    
-    tmp_rain_cml3 <- stars::read_ncdf(avhrr_path, var="rain_cml3", make_time = T, proxy=F)
-    tmp_rain_cml3 <- tmp_rain_cml3 %>% set_names(c("rain_cml3"))
-    
-    tmp_srad <- stars::read_ncdf(avhrr_path, var="srad", make_time = T, proxy=F)
-    tmp_srad <- tmp_srad %>% set_names(c("srad"))
-    
+    tmp_mod_max <- stars::read_ncdf(avhrr_path, var="NDVI_modis_max", make_time = T, proxy=F)
+    tmp_mod_max <- tmp_mod_max %>% set_names(c("ndvi_modis_max"))
+
     tmp_sza <- stars::read_ncdf(avhrr_path, var='SZEN_median', make_time = T, proxy=F)
     tmp_sza <- tmp_sza %>% set_names(c('sza'))
     
@@ -61,14 +57,16 @@ for (i in regions) {
     tmp_tod <- tmp_tod %>% set_names(c('tod'))
     
     ## Convert AVHRR data into data tables, add 'month' var.
-    tmp <- c(tmp_median, tmp_sza, tmp_tod, tmp_mod_mean,
-             tmp_median_1b, tmp_median_1f, tmp_rain_cml3, tmp_srad)
+    tmp <- c(tmp_median, tmp_sza, tmp_tod, tmp_mod_median,
+                 tmp_mod_min, tmp_mod_max)
+    
     d_cdr <- tmp %>% units::drop_units() %>% as.data.table()
     d_cdr <- d_cdr %>% mutate(month=month(time)) %>% as.data.table()
     
     #clear up some memory
-    rm(tmp_median, tmp_sza, tmp_tod, tmp_median_1b, tmp_median_1f,
-       tmp, tmp_mod_mean, tmp_rain_cml3, tmp_srad)
+    rm(tmp_median, tmp_sza, tmp_tod, tmp_mod_median,
+                 tmp_mod_min, tmp_mod_max)
+    
     gc(reset = T, full=T)
     
     # Import MODIS NDVI--------------------------------------------------------
@@ -90,8 +88,8 @@ for (i in regions) {
     
     # merge the modis and avhrr datasets # ~ 2 minutes
     dc2 <- merge(d_mcd[,.(longitude,latitude,time,ndvi_mcd)],
-               d_cdr[,.(longitude,latitude,time,ndvi_cdr, ndvi_cdr_1b, ndvi_cdr_1f,
-                        sza,ndvi_modis_mean,rain_cml3,srad,tod)], 
+                 d_cdr[,.(longitude,latitude, time, ndvi_cdr, ndvi_modis_min, 
+                        ndvi_modis_max, sza, ndvi_modis_median, tod)], 
                all=TRUE,
                by=c("longitude","latitude","time"))
     dc2 <- dc2[,`:=`(month=month(time))]
@@ -101,61 +99,18 @@ for (i in regions) {
     dc2_train <- dc2[is.na(ndvi_mcd)==F][is.na(ndvi_cdr)==F][
       between(time,ymd("2000-03-01"),ymd("2013-12-31"))==T][sample(.N, 1e6)]
     
-    dc2_test <- dc2[is.na(ndvi_mcd)==F][is.na(ndvi_cdr)==F][
-      between(time,ymd("2000-03-01"),ymd("2013-12-31"))==T][sample(.N, 1e6)]
-    
-    # Create a BAM-GAM
-    # mc11 with climate
+    # Create a BAM-GAM without climate   
     mc11 <- bam(ndvi_mcd ~ 
-                  ti(ndvi_modis_mean, ndvi_cdr, bs='ts')+
-                  ti(month,sza, bs=c('cc','ts'))+
+                  s(ndvi_cdr, bs='cs')+
+                  s(ndvi_modis_median, bs='ts')+
+                  s(ndvi_modis_min, bs='ts')+
+                  s(ndvi_modis_max, bs='ts')+
+                  ti(month, sza, bs=c('cc','ts'))+
                   ti(ndvi_cdr, tod, bs='ts')+
-                  ti(ndvi_cdr_1b, ndvi_cdr_1f, bs='ts')+ #lagged NDVI
-                  te(srad, log1p(rain_cml3), bs='ts')+
-                  te(longitude, latitude,  by=ndvi_cdr),
-                data=dc2_train[ndvi_mcd>0.05][ndvi_modis_mean > 0], 
+                  te(longitude, latitude, by=ndvi_cdr),
+                data=dc2_train[ndvi_mcd>0.05][ndvi_modis_median > 0],
                 discrete=T, 
                 select=T)
-    
-    # summarize and test results
-    # summary(mc11) # 94.5%
-    # getViz(mc11) %>% 
-    #   plot(allTerms=T) %>% 
-    #   print()
-    
-    dc2_test %>% 
-      mutate(pred = predict(mc11,newdata=.,type='response')) %>% 
-      select(ndvi_mcd,pred) %>% 
-      drop_na() %>% as.data.table() %>% 
-      .[,.(rmse = metrica::RMSE(
-        obs=.$ndvi_mcd,
-        pred=.$pred), 
-        R2 = metrica::R2(
-          obs=.$ndvi_mcd,
-          pred=.$pred))] 
-    
-    #plot 1:1 line
-    dc2_test %>% 
-      mutate(pred = predict(mc11,newdata=.,type='response')) %>% 
-      select(ndvi_mcd,pred) %>% 
-      drop_na() %>% as.data.table() %>%
-      .[sample(.N,1000)] %>% 
-      ggplot(aes(pred,ndvi_mcd))+
-      geom_point()+
-      geom_abline(col='red') +
-      coord_equal()
-    
-    #plot difference between modis/avhrr
-    dc2_test[sample(.N,10000)] %>% 
-      mutate(pred = predict(mc11,newdata=.,type='response')) %>% 
-      select(longitude, latitude, ndvi_mcd,pred) %>% 
-      drop_na() %>% as.data.table() %>%
-      ggplot(aes(longitude, latitude, color=ndvi_mcd - pred))+
-      geom_point()+
-      scico::scale_color_scico(palette='roma',midpoint=0, 
-                               limits=c(-0.2,0.2),
-                               oob=scales::squish)+
-      coord_sf()
     
     ##########################################################################
     # Apply Calibration prediction in parallel -------------------------------
@@ -168,8 +123,8 @@ for (i in regions) {
     
     # na's in the predictor cols can break stuff
     tmp <- dc2 %>% select(time,month,year,
-      longitude,latitude,ndvi_modis_mean,ndvi_cdr,ndvi_cdr_1b, ndvi_cdr_1f,
-      month,sza,tod,srad,rain_cml3) %>% 
+      longitude,latitude,ndvi_modis_median,ndvi_cdr,ndvi_modis_max,
+       ndvi_modis_min, month, sza, tod) %>% 
       drop_na() %>% as.data.table()
     
     tmp[,proc_id := 1:nrow(tmp)]
@@ -200,15 +155,13 @@ for (i in regions) {
                     by=c("longitude","latitude",'time'),
                     all=TRUE)
     
-    tmp3 <- st_as_stars(out, dims = c("longitude","latitude","time"))
     tmp3 <- st_as_stars(d_export, dims = c("longitude","latitude","time"))
     
     ## requires stars 0.6-1 or greater
     stars::write_mdim(tmp3,
                       filename=
                         paste(base_path,
-                            i,
-                            '_AVHRR_MODIS_NDVI_GAM_harmonized_climate_1982_2013.nc',
+                            'NDVI_', i, '_NOCLIM_GAM_harmonize_5km_monthly_1982_2013.nc',
                             sep=''),
                       layer = c("ndvi_mcd", "ndvi_cdr", 
                                 "ndvi_mcd_pred", 
@@ -218,41 +171,85 @@ for (i in regions) {
     ##########################################################################
     ## Plots, check residuals through time, space, etc -----------------------
     ##########################################################################
-    ss1 <- d_export[is.na(ndvi_mcd)==F][,.(
-      res = mean(ndvi_mcd - ndvi_mcd_pred,na.rm=T),
-      res_sd =- sd(ndvi_mcd - ndvi_mcd_pred,na.rm=T)
-    ),by=time]
+    # dc2_test <- dc2[is.na(ndvi_mcd)==F][is.na(ndvi_cdr)==F][
+    #   between(time,ymd("2000-03-01"),ymd("2013-12-31"))==T][sample(.N, 1e6)]
     
-    ss1 %>%
-      ggplot(aes(time, res))+
-      geom_hline(yintercept = 0, lwd=1, col='grey30')+
-      geom_ribbon(aes(time,ymin=res+res_sd,ymax=res-res_sd),
-                  alpha=0.3,col='transparent')+
-      geom_line(col='blue') +
-      labs(y = expression(paste(NDVI[MCD] - NDVI[pred])))
+    # summarize and test results
+    # summary(mc11) # 94.5%
+    # getViz(mc11) %>% 
+    #   plot(allTerms=T) %>% 
+    #   print()
     
-    tmp[,.(SZA = median(sza,na.rm=T)),by=time] %>%
-      ggplot(aes(time, SZA))+
-      geom_line()
-    tmp[,.(TOD = median(tod,na.rm=T)),by=time] %>%
-      ggplot(aes(time, TOD))+
-      geom_line()
+    # dc2_test %>% 
+    #   mutate(pred = predict(mc11,newdata=.,type='response')) %>% 
+    #   select(ndvi_mcd,pred) %>% 
+    #   drop_na() %>% as.data.table() %>% 
+    #   .[,.(rmse = metrica::RMSE(
+    #     obs=.$ndvi_mcd,
+    #     pred=.$pred), 
+    #     R2 = metrica::R2(
+    #       obs=.$ndvi_mcd,
+    #       pred=.$pred))] 
+    # 
+    # #plot 1:1 line
+    # dc2_test %>% 
+    #   mutate(pred = predict(mc11,newdata=.,type='response')) %>% 
+    #   select(ndvi_mcd,pred) %>% 
+    #   drop_na() %>% as.data.table() %>%
+    #   .[sample(.N,1000)] %>% 
+    #   ggplot(aes(pred,ndvi_mcd))+
+    #   geom_point()+
+    #   geom_abline(col='red') +
+    #   coord_equal()
+    # 
+    # #plot difference between modis/avhrr
+    # dc2_test[sample(.N,10000)] %>% 
+    #   mutate(pred = predict(mc11,newdata=.,type='response')) %>% 
+    #   select(longitude, latitude, ndvi_mcd,pred) %>% 
+    #   drop_na() %>% as.data.table() %>%
+    #   ggplot(aes(longitude, latitude, color=ndvi_mcd - pred))+
+    #   geom_point()+
+    #   scico::scale_color_scico(palette='roma',midpoint=0, 
+    #                            limits=c(-0.2,0.2),
+    #                            oob=scales::squish)+
+    #   coord_sf()
+    # 
     
-    ## check residuals through time
-    ss2 <- d_export[is.na(ndvi_mcd)==F][,.(
-      res = mean(ndvi_mcd - ndvi_mcd_pred,na.rm=T),
-      ndvi_u = mean(ndvi_mcd,na.rm=T),
-      res_sd =- sd(ndvi_mcd - ndvi_mcd_pred,na.rm=T)
-    ),by=.(longitude,latitude)]
+    # ss1 <- d_export[is.na(ndvi_mcd)==F][,.(
+    #   res = mean(ndvi_mcd - ndvi_mcd_pred,na.rm=T),
+    #   res_sd =- sd(ndvi_mcd - ndvi_mcd_pred,na.rm=T)
+    # ),by=time]
+    # 
+    # ss1 %>%
+    #   ggplot(aes(time, res))+
+    #   geom_hline(yintercept = 0, lwd=1, col='grey30')+
+    #   geom_ribbon(aes(time,ymin=res+res_sd,ymax=res-res_sd),
+    #               alpha=0.3,col='transparent')+
+    #   geom_line(col='blue') +
+    #   labs(y = expression(paste(NDVI[MCD] - NDVI[pred])))
     
-    ss2 %>%
-      ggplot(aes(longitude, latitude, fill=100 * res/ndvi_u))+
-      geom_raster()+
-      coord_sf() +
-      scico::scale_fill_scico(palette='roma',midpoint=0,
-                              limits=c(-25, 25),
-                              oob=scales::squish) +
-      labs(fill = "% bias")
+    # tmp[,.(SZA = median(sza,na.rm=T)),by=time] %>%
+    #   ggplot(aes(time, SZA))+
+    #   geom_line()
+    # tmp[,.(TOD = median(tod,na.rm=T)),by=time] %>%
+    #   ggplot(aes(time, TOD))+
+    #   geom_line()
+    # 
+    # ## check residuals through time
+    # ss2 <- d_export[is.na(ndvi_mcd)==F][,.(
+    #   res = mean(ndvi_mcd - ndvi_mcd_pred,na.rm=T),
+    #   ndvi_u = mean(ndvi_mcd,na.rm=T),
+    #   res_sd =- sd(ndvi_mcd - ndvi_mcd_pred,na.rm=T)
+    # ),by=.(longitude,latitude)]
+    # 
+    # ss2 %>%
+    #   ggplot(aes(longitude, latitude, fill=100 * res/ndvi_u))+
+    #   geom_raster()+
+    #   coord_sf() +
+    #   scico::scale_fill_scico(palette='roma',midpoint=0,
+    #                           limits=c(-25, 25),
+    #                           oob=scales::squish) +
+    #   labs(fill = "% bias")
 
 }
 
